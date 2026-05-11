@@ -13,4 +13,5 @@ dependencies = [
     "torch",
     "torchaudio",
     "torchvision",
+    "python-multipart>=0.0.28",
 ]

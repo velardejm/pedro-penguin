@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from openai import AsyncOpenAI
@@ -59,17 +59,25 @@ async def chat(request: ChatRequest):
 # NEW — Whisper transcription endpoint
 @app.post("/transcribe")
 async def transcribe(audio: UploadFile = File(...)):
-    # Save uploaded audio to a temp file
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+    tmp_path = os.path.join(tempfile.gettempdir(), "pedro_audio.wav")
+    try:
         content = await audio.read()
-        tmp.write(content)
-        tmp_path = tmp.name
+        with open(tmp_path, "wb") as f:
+            f.write(content)
 
-    # Whisper transcribes it
-    result = whisper_model.transcribe(tmp_path)
-    os.unlink(tmp_path)  # delete temp file
+        result = whisper_model.transcribe(tmp_path)
+        return {"text": result["text"]}
 
-    return {"text": result["text"]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except PermissionError:
+                pass  # Windows will clean it up on next run
+
 
 # NEW — Piper text to speech endpoint
 @app.post("/speak")
