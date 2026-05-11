@@ -1,12 +1,15 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 from typing import List
+import whisper
+import tempfile
+import os
 
 app = FastAPI()
 
-# Allow Next.js on port 3000 to talk to this API
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -16,6 +19,9 @@ app.add_middleware(
 
 OLLAMA_BASE_URL = "http://localhost:11434/v1"
 ollama = AsyncOpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama")
+
+# Load Whisper once at startup — not on every request
+whisper_model = whisper.load_model("base")
 
 SYSTEM_PROMPT = """
 You are Pedro the Penguin, a trivia-loving penguin who waddles 
@@ -27,12 +33,10 @@ the coolest name you have ever heard.
 Keep answers short, fun, and use simple words.
 """
 
-# Shape of each message
 class Message(BaseModel):
     role: str
     content: str
 
-# Shape of the full request from Next.js
 class ChatRequest(BaseModel):
     messages: List[Message]
 
@@ -42,10 +46,7 @@ async def health():
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    # Build messages array with system prompt at the top
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-
-    # Add conversation history from Next.js
     for msg in request.messages:
         messages.append({"role": msg.role, "content": msg.content})
 
@@ -53,5 +54,32 @@ async def chat(request: ChatRequest):
         model="llama3.2",
         messages=messages
     )
-
     return {"reply": response.choices[0].message.content}
+
+# NEW — Whisper transcription endpoint
+@app.post("/transcribe")
+async def transcribe(audio: UploadFile = File(...)):
+    # Save uploaded audio to a temp file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+        content = await audio.read()
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    # Whisper transcribes it
+    result = whisper_model.transcribe(tmp_path)
+    os.unlink(tmp_path)  # delete temp file
+
+    return {"text": result["text"]}
+
+# NEW — Piper text to speech endpoint
+@app.post("/speak")
+async def speak(request: dict):
+    text = request.get("text", "")
+    
+    # Save audio output to temp file
+    output_path = tempfile.mktemp(suffix=".wav")
+    
+    # Run piper to generate audio
+    os.system(f'echo "{text}" | piper --model en_US-lessac-medium --output_file {output_path}')
+    
+    return FileResponse(output_path, media_type="audio/wav")
